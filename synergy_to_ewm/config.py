@@ -14,7 +14,7 @@ class SynergyConfig:
     server: str               # e.g. "http://synergy-host:8400"
     database: str             # Synergy database path or name
     user: str
-    password: str
+    password: Optional[str] = None  # omit to use credentials stored via `ccm set_password`
     ccm_exe: str = "ccm"      # full path if ccm is not on PATH
     # Optional scope filters
     project: Optional[str] = None    # Synergy project spec to scope extraction
@@ -30,7 +30,7 @@ class EWMConfig:
 
     server: str               # e.g. "https://ewm-host:9443/ccm"
     user: str
-    password: str
+    password: Optional[str] = None  # omit to be prompted; credential can be saved to the system keyring
     project_area: str         # EWM Project Area name
     # Optional component/stream to target for SCM migration
     component_name: Optional[str] = None

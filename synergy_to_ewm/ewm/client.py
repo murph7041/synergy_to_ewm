@@ -48,7 +48,7 @@ class EWMClient:
         self,
         server: str,
         user: str,
-        password: str,
+        password: Optional[str] = None,
         verify_ssl: bool = True,
         ca_bundle: Optional[str] = None,
         rate_limit_delay: float = 0.1,
@@ -80,6 +80,42 @@ class EWMClient:
     # Session management
     # ------------------------------------------------------------------
 
+    _KEYRING_SERVICE = "synergy_to_ewm:ewm"
+
+    def _resolve_password(self) -> str:
+        """Return the EWM password, prompting and optionally saving if absent."""
+        if self.password:
+            return self.password
+
+        import keyring
+        import keyring.errors
+
+        # Try the system credential store first (works silently on subsequent runs).
+        try:
+            stored = keyring.get_password(self._KEYRING_SERVICE, self.user)
+            if stored:
+                return stored
+            _keyring_available = True
+        except keyring.errors.NoKeyringError:
+            _keyring_available = False
+
+        import getpass
+        import sys
+        pwd = getpass.getpass(f"EWM password for {self.user}: ")
+
+        if _keyring_available:
+            store_name = (
+                "Windows Credential Manager"
+                if sys.platform == "win32"
+                else "system keyring"
+            )
+            answer = input(f"Save password to {store_name}? [y/N] ").strip().lower()
+            if answer == "y":
+                keyring.set_password(self._KEYRING_SERVICE, self.user, pwd)
+                print("Password saved.")
+
+        return pwd
+
     def authenticate(self) -> None:
         """
         Jazz form-based authentication.
@@ -97,7 +133,7 @@ class EWMClient:
 
         # 2. POST credentials to the Jazz security check endpoint
         login_url = self._url("/authenticated/j_security_check")
-        data = {"j_username": self.user, "j_password": self.password}
+        data = {"j_username": self.user, "j_password": self._resolve_password()}
         r = self._session.post(
             login_url,
             data=data,

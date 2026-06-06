@@ -31,7 +31,7 @@ class CCMClient:
         server: str,
         database: str,
         user: str,
-        password: str,
+        password: Optional[str] = None,
         ccm_exe: str = "ccm",
     ) -> None:
         self.server = server
@@ -55,10 +55,11 @@ class CCMClient:
             "-s", self.server,
             "-d", self.database,
             "-n", self.user,
-            "-p", self.password,
             "-q",           # suppress interactive prompts
             "-nogui",
         ]
+        if self.password:
+            cmd += ["-p", self.password]
         result = self._run_raw(cmd)
         # `ccm start` prints the CCM_HOME path on success; empty on failure.
         home_line = result.stdout.strip()

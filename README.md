@@ -20,11 +20,15 @@ A Python module for migrating data from **IBM Rational Synergy** (CM Synergy / T
 - Network access to the EWM server
 - An EWM user account with permission to create work items and SCM content
 
+> **Synergy password:** Run `ccm set_password` before migrating to store your Synergy credentials in CCM's own credential store. When a password is stored this way you can omit the `password` field from the `synergy` config section entirely.
+>
+> **EWM password:** The `password` field in the `ewm` config section is optional. If omitted, you will be prompted on the first run and given the option to save the credential to the system keyring (Windows Credential Manager on Windows; GNOME Keyring or KWallet on Linux) — subsequent runs will use the stored credential without prompting. On headless Linux servers without a keyring daemon the save option is skipped and the password is used only for that run. You can also pre-store it manually: `python -c "import keyring; keyring.set_password('synergy_to_ewm:ewm', '<user>', '<password>')"`. To clear a stored credential: `python -c "import keyring; keyring.delete_password('synergy_to_ewm:ewm', '<user>')"`.
+
+Dependencies: `requests`, `urllib3`, `PyYAML`, `keyring`
+
 ```
 pip install -r requirements.txt
 ```
-
-Dependencies: `requests`, `urllib3`, `PyYAML`
 
 ## Quick start
 
@@ -86,7 +90,7 @@ Progress is saved to `migration_state.json` after each item. If the run is inter
 | `server` | Yes | Synergy server URL, e.g. `http://host:8400` |
 | `database` | Yes | Database path or name |
 | `user` | Yes | Synergy username |
-| `password` | Yes | Synergy password |
+| `password` | No | Synergy password. Omit if credentials are stored via `ccm set_password`. |
 | `ccm_exe` | No | Path to `ccm` executable (default: `ccm`) |
 | `project` | No | Project spec to scope artifact/baseline extraction |
 | `release` | No | Release name to scope task/defect queries |
@@ -98,7 +102,7 @@ Progress is saved to `migration_state.json` after each item. If the run is inter
 |---|---|---|
 | `server` | Yes | EWM server base URL, e.g. `https://host:9443/ccm` |
 | `user` | Yes | EWM username |
-| `password` | Yes | EWM password |
+| `password` | No | EWM password. Omit to be prompted on first run with an option to save to the system keyring. |
 | `project_area` | Yes | Exact name of the EWM Project Area |
 | `component_name` | No | SCM component name for source artifacts (created if absent) |
 | `stream_name` | No | SCM stream name (created if absent) |
