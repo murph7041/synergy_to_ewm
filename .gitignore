@@ -1,1 +1,3 @@
 /migration.log
+__pycache__/
+*.pyc
