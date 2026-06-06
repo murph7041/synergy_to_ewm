@@ -6,7 +6,7 @@ synergy:
   server: "http://synergy-host:8400"
   database: "/data/synergy/my_db"
   user: "synergy_admin"
-  password: "s3cr3t"
+  # password: "s3cr3t"         # omit if credentials are stored via `ccm set_password`
   ccm_exe: "ccm"               # full path if ccm is not on PATH
   project: "MyProject~project~1:admin:my_db"   # optional: scope to one project
 
@@ -25,7 +25,7 @@ synergy:
 ewm:
   server: "https://ewm-host:9443/ccm"
   user: "ewm_admin"
-  password: "s3cr3t"
+  # password: "s3cr3t"         # omit to be prompted on first run with option to save to system keyring
   project_area: "My EWM Project"
   component_name: "MyProject Source"     # optional: defaults to mapping_default.yaml value
   stream_name: "MyProject Main Stream"   # optional

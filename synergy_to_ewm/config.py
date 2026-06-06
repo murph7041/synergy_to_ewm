@@ -30,8 +30,8 @@ class EWMConfig:
 
     server: str               # e.g. "https://ewm-host:9443/ccm"
     user: str
-    password: Optional[str] = None  # omit to be prompted; credential can be saved to the system keyring
     project_area: str         # EWM Project Area name
+    password: Optional[str] = None  # omit to be prompted; credential can be saved to the system keyring
     # Optional component/stream to target for SCM migration
     component_name: Optional[str] = None
     stream_name: Optional[str] = None

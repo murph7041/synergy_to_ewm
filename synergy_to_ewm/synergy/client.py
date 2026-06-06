@@ -294,12 +294,19 @@ class CCMClient:
             env["CCM_HOME"] = self._home
 
         log.debug("ccm: %s", " ".join(cmd))
-        result = subprocess.run(
-            cmd,
-            capture_output=True,
-            text=True,
-            env=env,
-        )
+        try:
+            result = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                env=env,
+            )
+        except FileNotFoundError:
+            raise CCMError(
+                f"ccm executable not found: {cmd[0]!r}\n"
+                "  - Ensure the Synergy client is installed and 'ccm' is on your PATH, or\n"
+                "  - Set 'ccm_exe' in your config to the full path of the ccm executable."
+            ) from None
         if result.returncode != 0:
             # CCM returns exit code 1 for empty result sets (e.g. a query with
             # no matches), which is not an error.  Only treat exit code > 1 as

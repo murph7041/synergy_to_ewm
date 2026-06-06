@@ -282,8 +282,11 @@ To force a full re-migration, delete `migration_state.json` before running.
 
 ## Troubleshooting
 
+**`CCMError: ccm executable not found`**
+The Synergy client is not installed or `ccm` is not on your PATH. Install the Synergy client and ensure `ccm` is accessible, or set `ccm_exe` in the `synergy` config section to the full path of the executable.
+
 **`CCMError: ccm command failed`**
-The `ccm` executable is not on PATH or returned an error. Set `ccm_exe` to the full path and confirm you can run `ccm start` manually.
+The `ccm` executable ran but returned an error. Confirm you can run `ccm start` manually and check the logged stderr output for details.
 
 **`EWMAuthError: Authentication failed`**
 Check your EWM `user`/`password`. If your server uses a non-standard context root (not `/ccm`), update the `server` URL. For self-signed TLS certificates, set `verify_ssl: false` or point `ca_bundle` at your CA certificate file.
