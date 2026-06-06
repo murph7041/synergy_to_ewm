@@ -1,0 +1,49 @@
+# Example migration configuration.
+# Copy this file, fill in your values, and run:
+#   python -m synergy_to_ewm.migrate my_config.yaml [--dry-run]
+
+synergy:
+  server: "http://synergy-host:8400"
+  database: "/data/synergy/my_db"
+  user: "synergy_admin"
+  password: "s3cr3t"
+  ccm_exe: "ccm"               # full path if ccm is not on PATH
+  project: "MyProject~project~1:admin:my_db"   # optional: scope to one project
+
+  # Release scoping — pick one style:
+  release: "R2.5"              # single release (legacy)
+  # releases:                  # multiple releases in one run (supersedes release)
+  #   - "R3.0"
+  #   - "R3.1"
+
+  # Incremental migration: skip artifacts not modified before this date.
+  # Use after an initial full migration to pick up only new/changed content.
+  # since: "2025-06-01"        # ISO date YYYY-MM-DD
+
+  query_extra: ""              # optional: extra CCM query fragment ANDed into task queries
+
+ewm:
+  server: "https://ewm-host:9443/ccm"
+  user: "ewm_admin"
+  password: "s3cr3t"
+  project_area: "My EWM Project"
+  component_name: "MyProject Source"     # optional: defaults to mapping_default.yaml value
+  stream_name: "MyProject Main Stream"   # optional
+  verify_ssl: true
+  # ca_bundle: "/path/to/ca.crt"        # uncomment for self-signed certs
+
+migration:
+  mapping_file: null           # path to a custom mapping YAML; null = use built-in defaults
+  state_file: "migration_state.json"
+  log_file: "migration.log"
+  batch_size: 50
+  migrate_tasks: true
+  migrate_artifacts: true
+  migrate_baselines: true
+  migrate_attachments: true
+  migrate_comments: true
+  dry_run: false
+  # field_overrides:           # inline mapping overrides (merged on top of mapping_file)
+  #   work_item:
+  #     custom_field_map:
+  #       rtc_ext:customer: customer_name

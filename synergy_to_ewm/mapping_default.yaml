@@ -1,0 +1,59 @@
+# Default field mapping: Synergy → EWM
+# Override any section in your own YAML and pass it via MigrationConfig.mapping_file.
+# Values are either a literal string (constant) or a dict with a 'from' key (attribute copy)
+# plus an optional 'map' dict for value translation.
+
+work_item:
+  # EWM work item type to use per Synergy task_type
+  type_map:
+    task: "Task"
+    defect: "Defect"
+    problem: "Defect"
+    cr: "Change Request"
+    default: "Task"
+
+  # Synergy status → EWM workflow state
+  status_map:
+    assigned: "New"
+    in_progress: "In Progress"
+    completed: "Resolved"
+    closed: "Closed"
+    rejected: "Invalid"
+    default: "New"
+
+  # Synergy priority → EWM priority label
+  priority_map:
+    "1": "High"
+    "2": "Medium"
+    "3": "Low"
+    critical: "High"
+    high: "High"
+    medium: "Medium"
+    low: "Low"
+    default: "Medium"
+
+  # Synergy severity → EWM severity label
+  severity_map:
+    "1": "Critical"
+    "2": "Major"
+    "3": "Normal"
+    "4": "Minor"
+    critical: "Critical"
+    major: "Major"
+    minor: "Minor"
+    default: "Normal"
+
+  # Where to file work items when the Synergy project/component cannot be mapped
+  default_filed_against: "Unassigned"
+
+  # Fields to copy verbatim from SynergyTask.custom_attrs into EWM custom_attrs.
+  # Map format: ewm_attribute_id: synergy_attribute_name
+  custom_field_map: {}
+  # Example:
+  #   rtc_ext:customer_name: customer
+  #   rtc_ext:found_in_release: found_in_release
+
+scm:
+  # Default component name when none is configured explicitly
+  default_component: "Migrated from Synergy"
+  default_stream: "Migrated from Synergy Stream"
