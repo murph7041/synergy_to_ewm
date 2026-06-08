@@ -49,14 +49,14 @@ synergy:
   server: "http://synergy-host:8400"
   database: "/data/synergy/my_db"
   user: "synergy_admin"
-  password: "s3cr3t"
+  # password omitted — uses ccm set_password credential store
   project: "MyProject~project~1:admin:my_db"  # optional scope
   release: "R2.5"                              # optional scope
 
 ewm:
   server: "https://ewm-host:9443/ccm"
   user: "ewm_admin"
-  password: "s3cr3t"
+  # password omitted — prompted on first run with option to save to system keyring
   project_area: "My EWM Project"
 
 migration:
@@ -78,6 +78,72 @@ python -m synergy_to_ewm.migrate my_config.yaml
 ```
 
 Progress is saved to `migration_state.json` after each item. If the run is interrupted, re-running the same command skips already-migrated items.
+
+---
+
+## Extracting Synergy data without migrating
+
+Use the extraction CLI to pull all Synergy data into a self-contained JSON file without touching EWM. This is useful for inspecting data before a migration, archiving, or feeding a custom import pipeline.
+
+Only the `synergy` section of the config is needed — the `ewm` section can be omitted entirely.
+
+```bash
+# Default output file: synergy_extract.json
+python -m synergy_to_ewm.extract my_config.yaml
+
+# Specify output path
+python -m synergy_to_ewm.extract my_config.yaml output/my_extract.json
+
+# After pip install .
+synergy-extract my_config.yaml
+```
+
+### Output format
+
+The JSON file has four top-level arrays:
+
+| Key | Contents |
+|---|---|
+| `tasks` | All extracted `SynergyTask` objects (one per CCM task) |
+| `defects` | All extracted `SynergyTask` objects with `task_type = "defect"` |
+| `artifacts` | All versioned `SynergyObject` file records, oldest-first per file |
+| `baselines` | All `SynergyBaseline` snapshots with their member object lists |
+
+Each task includes its comments, attachments, and change history. File and attachment content is stored as **base64-encoded strings**.
+
+Source file content is in `artifacts[*].content`. Baseline membership (which file versions belong to which snapshot) is in `baselines[*].objects`, but those entries do not carry file content — cross-reference with `artifacts` by `spec` if the bytes are needed.
+
+---
+
+## Loading a Synergy extract into EWM
+
+Use the load CLI to push a previously-extracted JSON file into EWM without connecting to Synergy. This is the second half of the two-phase workflow.
+
+Only the `ewm` and `migration` sections of the config are required — the `synergy` section is ignored if present.
+
+```bash
+python -m synergy_to_ewm.load my_config.yaml synergy_extract.json
+
+# dry run — connects to EWM but writes nothing
+python -m synergy_to_ewm.load my_config.yaml synergy_extract.json --dry-run
+
+# after pip install .
+synergy-load my_config.yaml synergy_extract.json
+```
+
+The same `migration_state.json` resumability applies: items already marked done are skipped, so a failed run can be re-run safely.
+
+### Two-phase workflow
+
+Run extraction and loading as separate steps — useful when Synergy and EWM are on different networks, or when you want to inspect the data before committing it to EWM:
+
+```bash
+# Step 1 — on the Synergy network
+synergy-extract synergy_config.yaml synergy_extract.json
+
+# Step 2 — on the EWM network (synergy section not needed)
+synergy-load ewm_config.yaml synergy_extract.json
+```
 
 ---
 
@@ -251,7 +317,9 @@ synergy_to_ewm/
 └── synergy_to_ewm/
     ├── config.py              # MigrationConfig / SynergyConfig / EWMConfig
     ├── mapping_default.yaml   # Built-in field/status/priority/type maps
-    ├── migrate.py             # Migrator orchestrator + CLI entry point
+    ├── migrate.py             # Migrator orchestrator + CLI entry point (synergy-to-ewm)
+    ├── extract.py             # Synergy-only extraction CLI (synergy-extract)
+    ├── load.py                # EWM load-from-file CLI (synergy-load)
     ├── synergy/
     │   ├── client.py          # CCMClient — ccm CLI subprocess wrapper
     │   ├── extractor.py       # SynergyExtractor — tasks, artifacts, baselines
