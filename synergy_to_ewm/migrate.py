@@ -20,6 +20,7 @@ from typing import Optional
 from .config import MigrationConfig
 from .ewm.client import EWMClient
 from .ewm.loader import EWMLoader
+from .ewm.scm_cli import JazzSCMClient
 from .ewm.models import EWMWorkItem
 from .synergy.client import CCMClient
 from .synergy.extractor import SynergyExtractor
@@ -209,53 +210,83 @@ class Migrator:
                 ) as ewm_client:
 
                     project_area_id = ewm_client.find_project_area(ewm_cfg.project_area)
-                    component_id, stream_id = self._ensure_scm_targets(
-                        ewm_client, project_area_id, ewm_cfg
-                    )
 
-                    loader = EWMLoader(
-                        client=ewm_client,
-                        project_area_id=project_area_id,
-                        component_id=component_id,
-                        stream_id=stream_id,
-                        dry_run=self.cfg.dry_run,
-                    )
+                    use_cli = ewm_cfg.scm_backend == "cli"
+                    jazz_scm: Optional[JazzSCMClient] = None
+                    if use_cli:
+                        jazz_scm = JazzSCMClient(
+                            server=ewm_cfg.server,
+                            user=ewm_cfg.user,
+                            password=ewm_cfg.password,
+                            scm_exe=ewm_cfg.scm_exe,
+                            verify_ssl=ewm_cfg.verify_ssl,
+                        )
+                        jazz_scm.login()
 
-                    # Build the canonical release list.
-                    # `releases` (multi-value) supersedes the legacy `release` field.
-                    # [None] means "no release filter" — extract_tasks() treats None
-                    # as "omit the release clause from the CCM query".
-                    effective_releases = (
-                        syn_cfg.releases
-                        or ([syn_cfg.release] if syn_cfg.release else [None])
-                    )
-                    if len(effective_releases) > 1:
-                        log.info("Migrating %d releases: %s", len(effective_releases),
-                                 effective_releases)
+                    try:
+                        component_ref, stream_ref = self._ensure_scm_targets(
+                            ewm_client, project_area_id, ewm_cfg, jazz_scm
+                        )
 
-                    # Tasks and defects are separate CCM object types but share
-                    # the same EWM work-item pipeline, so we run both per release.
-                    if self.cfg.migrate_tasks:
-                        for rel in effective_releases:
-                            self._migrate_tasks(extractor, loader, stats,
-                                                task_type="task", release=rel)
-                            self._migrate_tasks(extractor, loader, stats,
-                                                task_type="defect", release=rel)
+                        loader = EWMLoader(
+                            client=ewm_client,
+                            project_area_id=project_area_id,
+                            component_id=None if use_cli else component_ref,
+                            stream_id=None if use_cli else stream_ref,
+                            dry_run=self.cfg.dry_run,
+                        )
 
-                    # Baselines are project-wide (not per-release in CCM), so we
-                    # query them once and filter by the effective release list.
-                    if self.cfg.migrate_baselines and syn_cfg.project:
-                        self._migrate_baselines(extractor, loader, stats,
-                                                releases=effective_releases)
+                        # Build the canonical release list.
+                        # `releases` (multi-value) supersedes the legacy `release` field.
+                        # [None] means "no release filter" — extract_tasks() treats None
+                        # as "omit the release clause from the CCM query".
+                        effective_releases = (
+                            syn_cfg.releases
+                            or ([syn_cfg.release] if syn_cfg.release else [None])
+                        )
+                        if len(effective_releases) > 1:
+                            log.info("Migrating %d releases: %s", len(effective_releases),
+                                     effective_releases)
 
-                    # Loose-artifact migration is mutually exclusive with baseline
-                    # migration: when baselines are enabled the artifact content is
-                    # already captured inside each baseline snapshot, so running
-                    # both phases would check in the same files twice.
-                    if self.cfg.migrate_artifacts and syn_cfg.project \
-                            and not self.cfg.migrate_baselines:
-                        self._migrate_artifacts(extractor, loader, stats,
-                                                since=syn_cfg.since)
+                        # Tasks and defects are separate CCM object types but share
+                        # the same EWM work-item pipeline, so we run both per release.
+                        if self.cfg.migrate_tasks:
+                            for rel in effective_releases:
+                                self._migrate_tasks(extractor, loader, stats,
+                                                    task_type="task", release=rel)
+                                self._migrate_tasks(extractor, loader, stats,
+                                                    task_type="defect", release=rel)
+
+                        # Baselines are project-wide (not per-release in CCM), so we
+                        # query them once and filter by the effective release list.
+                        if self.cfg.migrate_baselines and syn_cfg.project:
+                            if jazz_scm:
+                                self._migrate_baselines_cli(
+                                    jazz_scm, extractor, stats,
+                                    component_ref, stream_ref,
+                                    releases=effective_releases,
+                                )
+                            else:
+                                self._migrate_baselines(extractor, loader, stats,
+                                                        releases=effective_releases)
+
+                        # Loose-artifact migration is mutually exclusive with baseline
+                        # migration: when baselines are enabled the artifact content is
+                        # already captured inside each baseline snapshot, so running
+                        # both phases would check in the same files twice.
+                        if self.cfg.migrate_artifacts and syn_cfg.project \
+                                and not self.cfg.migrate_baselines:
+                            if jazz_scm:
+                                self._migrate_artifacts_cli(
+                                    jazz_scm, extractor, stats,
+                                    stream_ref, since=syn_cfg.since,
+                                )
+                            else:
+                                self._migrate_artifacts(extractor, loader, stats,
+                                                        since=syn_cfg.since)
+                    finally:
+                        if jazz_scm:
+                            jazz_scm.logout()
 
         except KeyboardInterrupt:
             # Caught separately so we can log a friendlier message; the state
@@ -425,6 +456,97 @@ class Migrator:
                 stats["errors"].append(state_key)
 
     # ------------------------------------------------------------------
+    # CLI SCM phase runners
+    # ------------------------------------------------------------------
+
+    def _migrate_baselines_cli(
+        self,
+        jazz_scm: JazzSCMClient,
+        extractor: SynergyExtractor,
+        stats: dict,
+        component_name: str,
+        stream_name: str,
+        releases: Optional[list] = None,
+    ) -> None:
+        log.info("=== Migrating baselines via Jazz SCM CLI ===")
+        try:
+            baselines = extractor.extract_baselines(releases=releases)
+        except Exception:
+            log.exception("Failed to extract baselines")
+            stats["errors"].append("extract_baselines")
+            return
+
+        for baseline in baselines:
+            state_key = f"baseline:{baseline.spec}"
+            if self._state.is_done(state_key):
+                log.debug("Skipping baseline %s (already migrated)", baseline.name)
+                continue
+            try:
+                ewm_baseline = self._baseline_mapper.map(baseline, component_name)
+                if self.cfg.dry_run:
+                    log.info("[DRY RUN] Would deliver %d artifacts and create baseline '%s'",
+                             len(ewm_baseline.artifacts), baseline.name)
+                    self._state.mark_done(state_key, "dry-run")
+                    stats["baselines_ok"] += 1
+                    stats["artifacts_ok"] += len(ewm_baseline.artifacts)
+                    continue
+
+                comment = f"Baseline: {baseline.name}"
+                jazz_scm.deliver_artifacts(ewm_baseline.artifacts, stream_name, comment=comment)
+                jazz_scm.create_baseline_snapshot(
+                    ewm_baseline.name, stream_name, component_name, ewm_baseline.description
+                )
+                self._state.mark_done(state_key, baseline.name)
+                stats["baselines_ok"] += 1
+                stats["artifacts_ok"] += len(ewm_baseline.artifacts)
+            except Exception as exc:
+                log.exception("Unhandled error for baseline %s", baseline.name)
+                self._state.mark_failed(state_key, repr(exc))
+                stats["errors"].append(state_key)
+
+    def _migrate_artifacts_cli(
+        self,
+        jazz_scm: JazzSCMClient,
+        extractor: SynergyExtractor,
+        stats: dict,
+        stream_name: str,
+        since: Optional[str] = None,
+    ) -> None:
+        log.info("=== Migrating loose artifacts via Jazz SCM CLI ===")
+        try:
+            objects = extractor.extract_artifacts(since=since)
+        except Exception:
+            log.exception("Failed to extract artifacts")
+            stats["errors"].append("extract_artifacts")
+            return
+
+        pending = [o for o in objects if not self._state.is_done(f"artifact:{o.spec}")]
+        if not pending:
+            log.info("All artifacts already migrated")
+            return
+
+        mapped = [(o, self._artifact_mapper.map(o)) for o in pending]
+        pairs = [(o, a) for o, a in mapped if a is not None]
+
+        if self.cfg.dry_run:
+            for obj, artifact in pairs:
+                log.info("[DRY RUN] Would deliver artifact %s", artifact.path)
+                self._state.mark_done(f"artifact:{obj.spec}", "dry-run")
+                stats["artifacts_ok"] += 1
+            return
+
+        try:
+            jazz_scm.deliver_artifacts([a for _, a in pairs], stream_name)
+            for obj, _ in pairs:
+                self._state.mark_done(f"artifact:{obj.spec}", "loaded")
+                stats["artifacts_ok"] += 1
+        except Exception as exc:
+            log.exception("Failed to deliver loose artifacts via Jazz SCM CLI")
+            for obj, _ in pairs:
+                self._state.mark_failed(f"artifact:{obj.spec}", repr(exc))
+            stats["errors"].append("artifact_delivery")
+
+    # ------------------------------------------------------------------
     # SCM setup helpers
     # ------------------------------------------------------------------
 
@@ -433,14 +555,14 @@ class Migrator:
         ewm_client: EWMClient,
         project_area_id: str,
         ewm_cfg,
+        jazz_scm: Optional[JazzSCMClient] = None,
     ) -> tuple[Optional[str], Optional[str]]:
         """
-        Return (component_id, stream_id), creating them in EWM if not present.
+        Return (component_ref, stream_ref), creating them if not present.
 
-        Called before any artifact or baseline migration so that the SCM
-        targets exist before the first checkin.  Returns (None, None) when
-        SCM migration is disabled entirely, which is also the value that
-        EWMLoader accepts to skip checkin calls.
+        For the REST backend, refs are UUIDs passed to EWMLoader.
+        For the CLI backend, refs are names passed to JazzSCMClient.
+        Returns (None, None) when SCM migration is disabled entirely.
         """
         if not (self.cfg.migrate_artifacts or self.cfg.migrate_baselines):
             return None, None
@@ -457,6 +579,11 @@ class Migrator:
             log.info("[DRY RUN] Would ensure component '%s' and stream '%s'",
                      component_name, stream_name)
             return None, None
+
+        if jazz_scm:
+            jazz_scm.ensure_component(component_name)
+            jazz_scm.ensure_stream(stream_name, component_name)
+            return component_name, stream_name
 
         log.info("Ensuring SCM component '%s'", component_name)
         component_id = ewm_client.create_component(component_name, project_area_id)

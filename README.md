@@ -327,9 +327,16 @@ synergy_to_ewm/
     ├── ewm/
     │   ├── client.py          # EWMClient — Jazz auth, OSLC CM, SCM REST
     │   ├── loader.py          # EWMLoader — work items, comments, attachments
+    │   ├── scm_cli.py         # JazzSCMClient — Jazz SCM CLI backend
     │   └── models.py          # EWMWorkItem / EWMArtifact / EWMBaseline
+    ├── gitlab/
+    │   ├── client.py          # GitLabClient — REST API (issues, milestones, uploads)
+    │   ├── git_client.py      # GitClient — git CLI wrapper for pushing source code
+    │   ├── loader.py          # GitLabLoader — orchestrates GitLab migration
+    │   └── models.py          # GitLabIssue / GitLabMilestone / GitLabNote
     └── transform/
-        └── mapper.py          # TaskMapper / ArtifactMapper / BaselineMapper
+        ├── mapper.py          # TaskMapper / ArtifactMapper / BaselineMapper (→ EWM)
+        └── gitlab_mapper.py   # GitLabMapper (→ GitLab)
 ```
 
 ---
@@ -370,9 +377,103 @@ The CCM query formatter uses `|||` as an internal column separator. If your Syne
 
 ---
 
+## Loading into GitLab
+
+Pass `--target gitlab` to `synergy-load` to push data into a GitLab project instead of EWM. The `ewm` config section is ignored; add a `gitlab` section instead.
+
+### What is migrated
+
+| Synergy | GitLab |
+|---|---|
+| Tasks and defects | Issues (with labels, milestone link) |
+| Task notes | Issue notes/comments |
+| Task attachments | Uploaded to the project and linked in the issue description |
+| Change history | Issue notes (prepended, oldest-first) |
+| Baselines / releases | Milestones + git tags |
+| Versioned source files | Git commits (one per baseline, oldest-first) |
+
+### Configuration
+
+Add a `gitlab` section to your config file:
+
+```yaml
+gitlab:
+  server: "https://gitlab.com"           # or your self-hosted URL
+  project: "mygroup/myproject"           # namespace/project-name or numeric ID
+  token: "glpat-xxxxxxxxxxxxxxxxxxxx"    # PAT with api + write_repository scopes
+                                         # or omit and export GITLAB_TOKEN=...
+  default_branch: "main"
+  git_workdir: "gitlab_migration_repo"   # persistent local clone (created if absent)
+  verify_ssl: true
+```
+
+### Running
+
+```bash
+# Dry run — connects to GitLab but creates nothing
+python -m synergy_to_ewm.load config.yaml synergy_extract.json --target gitlab --dry-run
+
+# Full run
+python -m synergy_to_ewm.load config.yaml synergy_extract.json --target gitlab
+
+# After pip install .
+synergy-load config.yaml synergy_extract.json --target gitlab
+```
+
+### Issue labels
+
+Every migrated issue is tagged `migrated-from-synergy` plus scoped labels derived from the mapping:
+
+- `type::task`, `type::defect`, etc. (from `type_map`)
+- `status::new`, `status::resolved`, etc. (from `status_map`)
+- `priority::high`, `priority::medium`, etc. (from `priority_map`)
+
+### Source code workflow
+
+For each baseline the loader writes all its file versions to a persistent local clone, commits, creates a git tag matching the baseline name, then pushes. Loose artifacts (when migrating without baselines) are batched into a single commit. The local clone in `git_workdir` persists between runs so an interrupted migration can resume from the last committed baseline.
+
+---
+
+## Jazz SCM CLI backend
+
+By default the tool checks files into EWM using the REST API (one HTTP call per file). For large repositories this can be slow. Switch to IBM's official `scm` command-line tool, which batches files per baseline delivery and uses the same binary protocol as the Eclipse client.
+
+### Requirements
+
+- The EWM client (`scm` executable) installed and on your PATH, or set `scm_exe` to its full path.
+- A pre-existing login session **or** supply the password — the `scm login` command stores credentials in the user profile, similar to `ccm set_password`.
+
+### Configuration
+
+Add two fields to the `ewm` section of your config:
+
+```yaml
+ewm:
+  server: "https://ewm-host:9443/ccm"
+  user: "ewm_admin"
+  project_area: "My EWM Project"
+  scm_backend: cli          # switch from 'rest' (default) to 'cli'
+  scm_exe: scm              # full path if not on PATH; e.g. /opt/jazz/scm
+```
+
+### How it works
+
+For each baseline the CLI backend:
+1. Creates a temporary workspace targeted at the stream
+2. Writes all baseline files to a local sandbox directory
+3. Runs `scm add .` → `scm checkin` → `scm deliver` in one batch
+4. Creates the baseline snapshot with `scm create baseline`
+5. Deletes the temporary workspace
+
+Loose artifacts (when migrating without baselines) are batched into a single delivery.
+
+Work item migration always uses the REST API regardless of `scm_backend`.
+
+---
+
 ## Limitations
 
-- **Source control migration** uses EWM's SCM REST API. For very large repositories (tens of thousands of files), consider using IBM's official Jazz SCM command-line tools or a Git bridge instead, and use this module for work item migration only (`migrate_artifacts: false`, `migrate_baselines: false`).
+- **Source control migration** supports two backends — see [Jazz SCM CLI backend](#jazz-scm-cli-backend) below. The default REST backend is convenient but slow for large repositories. Switch to `scm_backend: cli` for tens of thousands of files.
 - **History / blame** is not preserved — all files are checked in as a single commit by the migration user.
 - **Links between work items** (parent/child, blocks/depends-on) are not migrated in the current version.
 - Tested against Synergy 7.x and EWM 7.x. Older server versions may return slightly different CLI output or API responses.

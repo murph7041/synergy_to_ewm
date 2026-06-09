@@ -24,6 +24,7 @@ from typing import Optional
 from .ewm.client import EWMClient
 from .ewm.loader import EWMLoader
 from .ewm.models import EWMWorkItem
+from .ewm.scm_cli import JazzSCMClient
 from .migrate import MigrationState
 from .synergy.models import (
     SynergyAttachment,
@@ -186,6 +187,8 @@ class FileLoader:
             baselines_ok=0, artifacts_ok=0, errors=[],
         )
 
+        use_cli = self.ewm_cfg.scm_backend == "cli"
+
         try:
             with EWMClient(
                 server=self.ewm_cfg.server,
@@ -196,25 +199,50 @@ class FileLoader:
             ) as ewm_client:
 
                 project_area_id = ewm_client.find_project_area(self.ewm_cfg.project_area)
-                component_id, stream_id = self._ensure_scm_targets(ewm_client, project_area_id)
 
-                loader = EWMLoader(
-                    client=ewm_client,
-                    project_area_id=project_area_id,
-                    component_id=component_id,
-                    stream_id=stream_id,
-                    dry_run=self.dry_run,
-                )
+                jazz_scm: Optional[JazzSCMClient] = None
+                if use_cli:
+                    jazz_scm = JazzSCMClient(
+                        server=self.ewm_cfg.server,
+                        user=self.ewm_cfg.user,
+                        password=self.ewm_cfg.password,
+                        scm_exe=self.ewm_cfg.scm_exe,
+                        verify_ssl=self.ewm_cfg.verify_ssl,
+                    )
+                    jazz_scm.login()
 
-                if self.migrate_tasks:
-                    self._load_tasks(tasks, loader, stats)
-                    self._load_tasks(defects, loader, stats)
+                try:
+                    component_ref, stream_ref = self._ensure_scm_targets(
+                        ewm_client, project_area_id, jazz_scm
+                    )
 
-                if self.migrate_baselines and baselines:
-                    self._load_baselines(baselines, loader, stats)
+                    loader = EWMLoader(
+                        client=ewm_client,
+                        project_area_id=project_area_id,
+                        component_id=None if use_cli else component_ref,
+                        stream_id=None if use_cli else stream_ref,
+                        dry_run=self.dry_run,
+                    )
 
-                if self.migrate_artifacts and artifacts and not self.migrate_baselines:
-                    self._load_artifacts(artifacts, loader, stats)
+                    if self.migrate_tasks:
+                        self._load_tasks(tasks, loader, stats)
+                        self._load_tasks(defects, loader, stats)
+
+                    if self.migrate_baselines and baselines:
+                        if jazz_scm:
+                            self._load_baselines_cli(jazz_scm, baselines, stats,
+                                                     component_ref, stream_ref)
+                        else:
+                            self._load_baselines(baselines, loader, stats)
+
+                    if self.migrate_artifacts and artifacts and not self.migrate_baselines:
+                        if jazz_scm:
+                            self._load_artifacts_cli(jazz_scm, artifacts, stats, stream_ref)
+                        else:
+                            self._load_artifacts(artifacts, loader, stats)
+                finally:
+                    if jazz_scm:
+                        jazz_scm.logout()
 
         except KeyboardInterrupt:
             log.warning("Load interrupted — partial progress saved to state file")
@@ -317,6 +345,7 @@ class FileLoader:
         self,
         ewm_client: EWMClient,
         project_area_id: str,
+        jazz_scm: Optional[JazzSCMClient] = None,
     ) -> tuple[Optional[str], Optional[str]]:
         if not (self.migrate_artifacts or self.migrate_baselines):
             return None, None
@@ -334,11 +363,87 @@ class FileLoader:
                      component_name, stream_name)
             return None, None
 
+        if jazz_scm:
+            jazz_scm.ensure_component(component_name)
+            jazz_scm.ensure_stream(stream_name, component_name)
+            return component_name, stream_name
+
         log.info("Ensuring SCM component '%s'", component_name)
         component_id = ewm_client.create_component(component_name, project_area_id)
         log.info("Ensuring SCM stream '%s'", stream_name)
         stream_id = ewm_client.create_stream(stream_name, project_area_id, component_id)
         return component_id, stream_id
+
+    def _load_baselines_cli(
+        self,
+        jazz_scm: JazzSCMClient,
+        baselines: list,
+        stats: dict,
+        component_name: str,
+        stream_name: str,
+    ) -> None:
+        log.info("=== Loading %d baselines via Jazz SCM CLI ===", len(baselines))
+        for baseline in baselines:
+            state_key = f"baseline:{baseline.spec}"
+            if self._state.is_done(state_key):
+                log.debug("Skipping baseline %s (already migrated)", baseline.name)
+                continue
+            try:
+                ewm_baseline = self._baseline_mapper.map(baseline, component_name)
+                if self.dry_run:
+                    log.info("[DRY RUN] Would deliver %d artifacts and create baseline '%s'",
+                             len(ewm_baseline.artifacts), baseline.name)
+                    self._state.mark_done(state_key, "dry-run")
+                    stats["baselines_ok"] += 1
+                    stats["artifacts_ok"] += len(ewm_baseline.artifacts)
+                    continue
+
+                comment = f"Baseline: {baseline.name}"
+                jazz_scm.deliver_artifacts(ewm_baseline.artifacts, stream_name, comment=comment)
+                jazz_scm.create_baseline_snapshot(
+                    ewm_baseline.name, stream_name, component_name, ewm_baseline.description
+                )
+                self._state.mark_done(state_key, baseline.name)
+                stats["baselines_ok"] += 1
+                stats["artifacts_ok"] += len(ewm_baseline.artifacts)
+            except Exception as exc:
+                log.exception("Unhandled error for baseline %s", baseline.name)
+                self._state.mark_failed(state_key, repr(exc))
+                stats["errors"].append(state_key)
+
+    def _load_artifacts_cli(
+        self,
+        jazz_scm: JazzSCMClient,
+        artifacts: list,
+        stats: dict,
+        stream_name: str,
+    ) -> None:
+        log.info("=== Loading loose artifacts via Jazz SCM CLI ===")
+        pending = [o for o in artifacts if not self._state.is_done(f"artifact:{o.spec}")]
+        if not pending:
+            log.info("All artifacts already migrated")
+            return
+
+        mapped = [(o, self._artifact_mapper.map(o)) for o in pending]
+        pairs = [(o, a) for o, a in mapped if a is not None]
+
+        if self.dry_run:
+            for obj, artifact in pairs:
+                log.info("[DRY RUN] Would deliver artifact %s", artifact.path)
+                self._state.mark_done(f"artifact:{obj.spec}", "dry-run")
+                stats["artifacts_ok"] += 1
+            return
+
+        try:
+            jazz_scm.deliver_artifacts([a for _, a in pairs], stream_name)
+            for obj, _ in pairs:
+                self._state.mark_done(f"artifact:{obj.spec}", "loaded")
+                stats["artifacts_ok"] += 1
+        except Exception as exc:
+            log.exception("Failed to deliver loose artifacts via Jazz SCM CLI")
+            for obj, _ in pairs:
+                self._state.mark_failed(f"artifact:{obj.spec}", repr(exc))
+            stats["errors"].append("artifact_delivery")
 
 
 # ---------------------------------------------------------------------------
@@ -347,14 +452,20 @@ class FileLoader:
 
 def main() -> None:
     import yaml
-    from .config import EWMConfig
+    from .config import EWMConfig, GitLabConfig
 
     if len(sys.argv) < 3:
-        print("Usage: python -m synergy_to_ewm.load <config.yaml> <synergy_extract.json>")
+        print("Usage: python -m synergy_to_ewm.load <config.yaml> <synergy_extract.json>"
+              " [--target ewm|gitlab] [--dry-run]")
         sys.exit(1)
 
     config_path = sys.argv[1]
     json_path = sys.argv[2]
+
+    target = "ewm"
+    for i, arg in enumerate(sys.argv):
+        if arg == "--target" and i + 1 < len(sys.argv):
+            target = sys.argv[i + 1].lower()
 
     if not Path(json_path).exists():
         print(f"Error: extract file not found: {json_path}")
@@ -363,7 +474,11 @@ def main() -> None:
     with open(config_path) as f:
         raw = yaml.safe_load(f)
 
-    log_file = raw.get("migration", {}).get("log_file", "migration.log")
+    migration_raw = raw.get("migration", {})
+    if "--dry-run" in sys.argv:
+        migration_raw["dry_run"] = True
+
+    log_file = migration_raw.get("log_file", "migration.log")
     handlers = [logging.StreamHandler(sys.stdout)]
     if log_file:
         handlers.append(logging.FileHandler(log_file))
@@ -373,15 +488,23 @@ def main() -> None:
         handlers=handlers,
     )
 
-    ewm_cfg = EWMConfig(**raw["ewm"])
-    migration_raw = raw.get("migration", {})
-    if "--dry-run" in sys.argv:
-        migration_raw["dry_run"] = True
-
     tasks, defects, artifacts, baselines = load_json(json_path)
 
-    file_loader = FileLoader(ewm_cfg, migration_raw)
-    stats = file_loader.run(tasks, defects, artifacts, baselines)
+    if target == "gitlab":
+        from .gitlab.loader import GitLabLoader
+        if "gitlab" not in raw:
+            print("Error: config file has no 'gitlab' section")
+            sys.exit(1)
+        gitlab_cfg = GitLabConfig(**raw["gitlab"])
+        loader = GitLabLoader(gitlab_cfg, migration_raw)
+    else:
+        if "ewm" not in raw:
+            print("Error: config file has no 'ewm' section")
+            sys.exit(1)
+        ewm_cfg = EWMConfig(**raw["ewm"])
+        loader = FileLoader(ewm_cfg, migration_raw)
+
+    stats = loader.run(tasks, defects, artifacts, baselines)
 
     print("\n=== Load Summary ===")
     for k, v in stats.items():

@@ -38,6 +38,22 @@ class EWMConfig:
     # TLS
     verify_ssl: bool = True
     ca_bundle: Optional[str] = None
+    # SCM backend: 'rest' (default) or 'cli' (IBM Jazz SCM command-line tool)
+    scm_backend: str = "rest"
+    scm_exe: str = "scm"    # path to the 'scm' executable; only used when scm_backend='cli'
+
+
+@dataclass
+class GitLabConfig:
+    """Connection settings for GitLab (issue tracking + git source control)."""
+
+    server: str               # e.g. "https://gitlab.com" or self-hosted URL
+    project: str              # "namespace/project-name" or numeric project ID
+    token: Optional[str] = None   # Personal/Project Access Token; falls back to GITLAB_TOKEN env var
+    default_branch: str = "main"
+    git_workdir: str = "gitlab_migration_repo"  # persistent local clone directory
+    verify_ssl: bool = True
+    ca_bundle: Optional[str] = None
 
 
 @dataclass
