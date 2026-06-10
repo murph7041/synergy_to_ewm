@@ -61,42 +61,47 @@ def extract(cfg: "SynergyConfig", output_path: str) -> dict:  # noqa: F821
 
     Returns a summary dict with item counts.
     """
-    from .synergy.client import CCMClient
+    from .synergy.client import CCMClient, CCMError
     from .synergy.extractor import SynergyExtractor
 
     summary: dict = dict(tasks=0, defects=0, artifacts=0, baselines=0)
 
-    with CCMClient(
-        server=cfg.server,
-        database=cfg.database,
-        user=cfg.user,
-        password=cfg.password,
-        ccm_exe=cfg.ccm_exe,
-    ) as ccm:
+    try:
+        with CCMClient(
+            server=cfg.server,
+            database=cfg.database,
+            user=cfg.user,
+            password=cfg.password,
+            ccm_exe=cfg.ccm_exe,
+        ) as ccm:
 
-        extractor = SynergyExtractor(
-            client=ccm,
-            project=cfg.project,
-            release=cfg.release,
-            extra_query=cfg.query_extra,
-            fetch_file_content=True,
-        )
+            extractor = SynergyExtractor(
+                client=ccm,
+                project=cfg.project,
+                release=cfg.release,
+                extra_query=cfg.query_extra,
+                fetch_file_content=True,
+            )
 
-        effective_releases = cfg.releases or ([cfg.release] if cfg.release else [None])
-        if len(effective_releases) > 1:
-            log.info("Extracting %d releases: %s", len(effective_releases), effective_releases)
+            effective_releases = cfg.releases or ([cfg.release] if cfg.release else [None])
+            if len(effective_releases) > 1:
+                log.info("Extracting %d releases: %s", len(effective_releases), effective_releases)
 
-        tasks = []
-        defects = []
-        for rel in effective_releases:
-            tasks.extend(extractor.extract_tasks(task_type="task", release=rel))
-            defects.extend(extractor.extract_tasks(task_type="defect", release=rel))
+            tasks = []
+            defects = []
+            for rel in effective_releases:
+                tasks.extend(extractor.extract_tasks(task_type="task", release=rel))
+                defects.extend(extractor.extract_tasks(task_type="defect", release=rel))
 
-        artifacts = []
-        baselines = []
-        if cfg.project:
-            baselines = extractor.extract_baselines(releases=effective_releases)
-            artifacts = extractor.extract_artifacts(since=cfg.since)
+            artifacts = []
+            baselines = []
+            if cfg.project:
+                baselines = extractor.extract_baselines(releases=effective_releases)
+                artifacts = extractor.extract_artifacts(since=cfg.since)
+
+    except CCMError as exc:
+        log.error("Synergy session failed: %s", exc)
+        raise
 
     summary["tasks"] = len(tasks)
     summary["defects"] = len(defects)
@@ -144,8 +149,19 @@ def main() -> None:
         handlers=[logging.StreamHandler()],
     )
 
+    from .synergy.client import CCMError
+
     cfg = SynergyConfig(**raw["synergy"])
-    summary = extract(cfg, output_path)
+
+    try:
+        summary = extract(cfg, output_path)
+    except CCMError as exc:
+        print(f"\nError: {exc}", file=sys.stderr)
+        sys.exit(1)
+    except Exception as exc:
+        log.exception("Unexpected error during extraction")
+        print(f"\nError: {exc}", file=sys.stderr)
+        sys.exit(1)
 
     print("\n=== Extraction Summary ===")
     for k, v in summary.items():

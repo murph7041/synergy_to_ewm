@@ -21,7 +21,7 @@ import sys
 from pathlib import Path
 from typing import Optional
 
-from .ewm.client import EWMClient
+from .ewm.client import EWMAuthError, EWMClient
 from .ewm.loader import EWMLoader
 from .ewm.models import EWMWorkItem
 from .ewm.scm_cli import JazzSCMClient
@@ -247,6 +247,9 @@ class FileLoader:
         except KeyboardInterrupt:
             log.warning("Load interrupted — partial progress saved to state file")
             stats["errors"].append("interrupted")
+        except EWMAuthError as exc:
+            log.error("EWM session startup failed — %s", exc)
+            stats["errors"].append("session_startup_failed")
         except Exception:
             log.exception("Fatal error during load — partial progress saved to state file")
             stats["errors"].append("fatal")

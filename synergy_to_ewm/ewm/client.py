@@ -121,40 +121,72 @@ class EWMClient:
         Jazz form-based authentication.
         Handles the redirect dance required by Jazz servers.
         """
-        # 1. Trigger the auth redirect by hitting a protected resource
-        auth_url = self._url("/authenticated/identity")
-        r = self._session.get(auth_url, verify=self.verify,
-                              allow_redirects=True, timeout=self._timeout)
+        try:
+            # 1. Trigger the auth redirect by hitting a protected resource
+            auth_url = self._url("/authenticated/identity")
+            r = self._session.get(auth_url, verify=self.verify,
+                                  allow_redirects=True, timeout=self._timeout)
 
-        if r.status_code == 200 and "authenticated" in r.url:
-            self._authenticated = True
-            log.info("Already authenticated to EWM")
-            return
+            if r.status_code == 200 and "authenticated" in r.url:
+                self._authenticated = True
+                log.info("Already authenticated to EWM")
+                return
 
-        # 2. POST credentials to the Jazz security check endpoint
-        login_url = self._url("/authenticated/j_security_check")
-        data = {"j_username": self.user, "j_password": self._resolve_password()}
-        r = self._session.post(
-            login_url,
-            data=data,
-            headers={"Content-Type": _FORM},
-            verify=self.verify,
-            allow_redirects=True,
-            timeout=self._timeout,
-        )
-
-        if r.status_code not in (200, 302):
-            raise EWMAuthError(
-                f"Authentication failed (HTTP {r.status_code}): {r.text[:200]}"
+            # 2. POST credentials to the Jazz security check endpoint
+            login_url = self._url("/authenticated/j_security_check")
+            data = {"j_username": self.user, "j_password": self._resolve_password()}
+            r = self._session.post(
+                login_url,
+                data=data,
+                headers={"Content-Type": _FORM},
+                verify=self.verify,
+                allow_redirects=True,
+                timeout=self._timeout,
             )
 
-        # 3. Verify we are now authenticated
-        r2 = self._session.get(auth_url, verify=self.verify, timeout=self._timeout)
-        if r2.status_code != 200:
-            raise EWMAuthError("Authentication check failed after login")
+            if r.status_code not in (200, 302):
+                raise EWMAuthError(
+                    f"Authentication failed (HTTP {r.status_code}): {r.text[:200]}"
+                )
 
-        self._authenticated = True
-        log.info("Authenticated to EWM as %s", self.user)
+            # 3. Verify we are now authenticated
+            r2 = self._session.get(auth_url, verify=self.verify, timeout=self._timeout)
+            if r2.status_code != 200:
+                raise EWMAuthError(
+                    f"EWM rejected credentials for user {self.user!r} "
+                    f"(post-login check returned HTTP {r2.status_code}).\n"
+                    f"  - Verify the username and password."
+                )
+
+            self._authenticated = True
+            log.info("Authenticated to EWM as %s", self.user)
+
+        except EWMAuthError:
+            raise
+        except requests.exceptions.SSLError as exc:
+            raise EWMAuthError(
+                f"SSL certificate error connecting to EWM at {self.server!r}.\n"
+                f"  - For a self-signed certificate, set verify_ssl=False or supply "
+                f"the CA bundle path via ca_bundle.\n"
+                f"  Detail: {exc}"
+            ) from exc
+        except requests.exceptions.ConnectionError as exc:
+            raise EWMAuthError(
+                f"Cannot reach EWM server at {self.server!r}.\n"
+                f"  - Verify the server URL and that the server is running and "
+                f"reachable from this host.\n"
+                f"  Detail: {exc}"
+            ) from exc
+        except requests.exceptions.Timeout as exc:
+            raise EWMAuthError(
+                f"Timed out connecting to EWM at {self.server!r}.\n"
+                f"  - The server may be overloaded or the connect_timeout too short.\n"
+                f"  Detail: {exc}"
+            ) from exc
+        except requests.exceptions.RequestException as exc:
+            raise EWMAuthError(
+                f"Network error during EWM authentication to {self.server!r}: {exc}"
+            ) from exc
 
     def __enter__(self) -> "EWMClient":
         self.authenticate()

@@ -60,9 +60,30 @@ class CCMClient:
         ]
         if self.password:
             cmd += ["-p", self.password]
-        result = self._run_raw(cmd)
+        try:
+            result = self._run_raw(cmd)
+        except CCMError as exc:
+            raise CCMError(
+                f"Could not start Synergy session on {self.server!r}.\n"
+                f"  - Verify the server URL, database ({self.database!r}), and that "
+                f"the Synergy server is reachable from this host.\n"
+                f"  Original error: {exc}"
+            ) from exc
+
         # `ccm start` prints the CCM_HOME path on success; empty on failure.
+        # rc=1 (auth error, wrong DB) does not raise from _run_raw, so check
+        # explicitly: if we got no CCM_HOME and the command exited non-zero the
+        # session was not established.
         home_line = result.stdout.strip()
+        if not home_line and result.returncode != 0:
+            stderr_msg = result.stderr.strip()
+            raise CCMError(
+                f"Synergy session start failed (rc={result.returncode}) — "
+                f"authentication or configuration error.\n"
+                f"  - Check username ({self.user!r}), password, server "
+                f"({self.server!r}), and database ({self.database!r}).\n"
+                + (f"  CCM output: {stderr_msg}" if stderr_msg else "")
+            )
         if home_line:
             self._home = home_line
         self._started = True

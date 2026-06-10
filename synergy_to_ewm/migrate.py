@@ -18,11 +18,11 @@ from pathlib import Path
 from typing import Optional
 
 from .config import MigrationConfig
-from .ewm.client import EWMClient
+from .ewm.client import EWMAuthError, EWMClient
 from .ewm.loader import EWMLoader
 from .ewm.scm_cli import JazzSCMClient
 from .ewm.models import EWMWorkItem
-from .synergy.client import CCMClient
+from .synergy.client import CCMClient, CCMError
 from .synergy.extractor import SynergyExtractor
 from .transform.mapper import ArtifactMapper, BaselineMapper, TaskMapper, load_mapping
 
@@ -294,8 +294,14 @@ class Migrator:
             log.warning("Migration interrupted — partial progress saved to %s",
                         self.cfg.state_file)
             stats["errors"].append("interrupted")
+        except (CCMError, EWMAuthError) as exc:
+            # Session startup failures produce actionable messages from the
+            # client layer; log them at ERROR (not exception) so the traceback
+            # doesn't bury the human-readable hint.
+            log.error("Session startup failed — %s", exc)
+            stats["errors"].append("session_startup_failed")
         except Exception:
-            # Any unhandled exception (auth failure, CCM crash, etc.) lands here.
+            # Any unhandled exception (mid-run crash, mapping error, etc.)
             # Per-item progress is already in the state file; re-running after
             # fixing the root cause will skip completed items automatically.
             log.exception("Fatal error during migration — partial progress saved to %s",
