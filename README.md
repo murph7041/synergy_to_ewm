@@ -20,11 +20,15 @@ A Python module for migrating data from **IBM Rational Synergy** (CM Synergy / T
 - Network access to the EWM server
 - An EWM user account with permission to create work items and SCM content
 
+> **Synergy password:** Run `ccm set_password` before migrating to store your Synergy credentials in CCM's own credential store. When a password is stored this way you can omit the `password` field from the `synergy` config section entirely.
+>
+> **EWM password:** The `password` field in the `ewm` config section is optional. If omitted, you will be prompted on the first run and given the option to save the credential to the system keyring (Windows Credential Manager on Windows; GNOME Keyring or KWallet on Linux) — subsequent runs will use the stored credential without prompting. On headless Linux servers without a keyring daemon the save option is skipped and the password is used only for that run. You can also pre-store it manually: `python -c "import keyring; keyring.set_password('synergy_to_ewm:ewm', '<user>', '<password>')"`. To clear a stored credential: `python -c "import keyring; keyring.delete_password('synergy_to_ewm:ewm', '<user>')"`.
+
+Dependencies: `requests`, `urllib3`, `PyYAML`, `keyring`
+
 ```
 pip install -r requirements.txt
 ```
-
-Dependencies: `requests`, `urllib3`, `PyYAML`
 
 ## Quick start
 
@@ -45,14 +49,14 @@ synergy:
   server: "http://synergy-host:8400"
   database: "/data/synergy/my_db"
   user: "synergy_admin"
-  password: "s3cr3t"
+  # password omitted — uses ccm set_password credential store
   project: "MyProject~project~1:admin:my_db"  # optional scope
   release: "R2.5"                              # optional scope
 
 ewm:
   server: "https://ewm-host:9443/ccm"
   user: "ewm_admin"
-  password: "s3cr3t"
+  # password omitted — prompted on first run with option to save to system keyring
   project_area: "My EWM Project"
 
 migration:
@@ -77,6 +81,72 @@ Progress is saved to `migration_state.json` after each item. If the run is inter
 
 ---
 
+## Extracting Synergy data without migrating
+
+Use the extraction CLI to pull all Synergy data into a self-contained JSON file without touching EWM. This is useful for inspecting data before a migration, archiving, or feeding a custom import pipeline.
+
+Only the `synergy` section of the config is needed — the `ewm` section can be omitted entirely.
+
+```bash
+# Default output file: synergy_extract.json
+python -m synergy_to_ewm.extract my_config.yaml
+
+# Specify output path
+python -m synergy_to_ewm.extract my_config.yaml output/my_extract.json
+
+# After pip install .
+synergy-extract my_config.yaml
+```
+
+### Output format
+
+The JSON file has four top-level arrays:
+
+| Key | Contents |
+|---|---|
+| `tasks` | All extracted `SynergyTask` objects (one per CCM task) |
+| `defects` | All extracted `SynergyTask` objects with `task_type = "defect"` |
+| `artifacts` | All versioned `SynergyObject` file records, oldest-first per file |
+| `baselines` | All `SynergyBaseline` snapshots with their member object lists |
+
+Each task includes its comments, attachments, and change history. File and attachment content is stored as **base64-encoded strings**.
+
+Source file content is in `artifacts[*].content`. Baseline membership (which file versions belong to which snapshot) is in `baselines[*].objects`, but those entries do not carry file content — cross-reference with `artifacts` by `spec` if the bytes are needed.
+
+---
+
+## Loading a Synergy extract into EWM
+
+Use the load CLI to push a previously-extracted JSON file into EWM without connecting to Synergy. This is the second half of the two-phase workflow.
+
+Only the `ewm` and `migration` sections of the config are required — the `synergy` section is ignored if present.
+
+```bash
+python -m synergy_to_ewm.load my_config.yaml synergy_extract.json
+
+# dry run — connects to EWM but writes nothing
+python -m synergy_to_ewm.load my_config.yaml synergy_extract.json --dry-run
+
+# after pip install .
+synergy-load my_config.yaml synergy_extract.json
+```
+
+The same `migration_state.json` resumability applies: items already marked done are skipped, so a failed run can be re-run safely.
+
+### Two-phase workflow
+
+Run extraction and loading as separate steps — useful when Synergy and EWM are on different networks, or when you want to inspect the data before committing it to EWM:
+
+```bash
+# Step 1 — on the Synergy network
+synergy-extract synergy_config.yaml synergy_extract.json
+
+# Step 2 — on the EWM network (synergy section not needed)
+synergy-load ewm_config.yaml synergy_extract.json
+```
+
+---
+
 ## Configuration reference
 
 ### `synergy` section
@@ -86,7 +156,7 @@ Progress is saved to `migration_state.json` after each item. If the run is inter
 | `server` | Yes | Synergy server URL, e.g. `http://host:8400` |
 | `database` | Yes | Database path or name |
 | `user` | Yes | Synergy username |
-| `password` | Yes | Synergy password |
+| `password` | No | Synergy password. Omit if credentials are stored via `ccm set_password`. |
 | `ccm_exe` | No | Path to `ccm` executable (default: `ccm`) |
 | `project` | No | Project spec to scope artifact/baseline extraction |
 | `release` | No | Release name to scope task/defect queries |
@@ -98,7 +168,7 @@ Progress is saved to `migration_state.json` after each item. If the run is inter
 |---|---|---|
 | `server` | Yes | EWM server base URL, e.g. `https://host:9443/ccm` |
 | `user` | Yes | EWM username |
-| `password` | Yes | EWM password |
+| `password` | No | EWM password. Omit to be prompted on first run with an option to save to the system keyring. |
 | `project_area` | Yes | Exact name of the EWM Project Area |
 | `component_name` | No | SCM component name for source artifacts (created if absent) |
 | `stream_name` | No | SCM stream name (created if absent) |
@@ -247,7 +317,9 @@ synergy_to_ewm/
 └── synergy_to_ewm/
     ├── config.py              # MigrationConfig / SynergyConfig / EWMConfig
     ├── mapping_default.yaml   # Built-in field/status/priority/type maps
-    ├── migrate.py             # Migrator orchestrator + CLI entry point
+    ├── migrate.py             # Migrator orchestrator + CLI entry point (synergy-to-ewm)
+    ├── extract.py             # Synergy-only extraction CLI (synergy-extract)
+    ├── load.py                # EWM load-from-file CLI (synergy-load)
     ├── synergy/
     │   ├── client.py          # CCMClient — ccm CLI subprocess wrapper
     │   ├── extractor.py       # SynergyExtractor — tasks, artifacts, baselines
@@ -255,9 +327,16 @@ synergy_to_ewm/
     ├── ewm/
     │   ├── client.py          # EWMClient — Jazz auth, OSLC CM, SCM REST
     │   ├── loader.py          # EWMLoader — work items, comments, attachments
+    │   ├── scm_cli.py         # JazzSCMClient — Jazz SCM CLI backend
     │   └── models.py          # EWMWorkItem / EWMArtifact / EWMBaseline
+    ├── gitlab/
+    │   ├── client.py          # GitLabClient — REST API (issues, milestones, uploads)
+    │   ├── git_client.py      # GitClient — git CLI wrapper for pushing source code
+    │   ├── loader.py          # GitLabLoader — orchestrates GitLab migration
+    │   └── models.py          # GitLabIssue / GitLabMilestone / GitLabNote
     └── transform/
-        └── mapper.py          # TaskMapper / ArtifactMapper / BaselineMapper
+        ├── mapper.py          # TaskMapper / ArtifactMapper / BaselineMapper (→ EWM)
+        └── gitlab_mapper.py   # GitLabMapper (→ GitLab)
 ```
 
 ---
@@ -278,8 +357,11 @@ To force a full re-migration, delete `migration_state.json` before running.
 
 ## Troubleshooting
 
+**`CCMError: ccm executable not found`**
+The Synergy client is not installed or `ccm` is not on your PATH. Install the Synergy client and ensure `ccm` is accessible, or set `ccm_exe` in the `synergy` config section to the full path of the executable.
+
 **`CCMError: ccm command failed`**
-The `ccm` executable is not on PATH or returned an error. Set `ccm_exe` to the full path and confirm you can run `ccm start` manually.
+The `ccm` executable ran but returned an error. Confirm you can run `ccm start` manually and check the logged stderr output for details.
 
 **`EWMAuthError: Authentication failed`**
 Check your EWM `user`/`password`. If your server uses a non-standard context root (not `/ccm`), update the `server` URL. For self-signed TLS certificates, set `verify_ssl: false` or point `ca_bundle` at your CA certificate file.
@@ -295,9 +377,103 @@ The CCM query formatter uses `|||` as an internal column separator. If your Syne
 
 ---
 
+## Loading into GitLab
+
+Pass `--target gitlab` to `synergy-load` to push data into a GitLab project instead of EWM. The `ewm` config section is ignored; add a `gitlab` section instead.
+
+### What is migrated
+
+| Synergy | GitLab |
+|---|---|
+| Tasks and defects | Issues (with labels, milestone link) |
+| Task notes | Issue notes/comments |
+| Task attachments | Uploaded to the project and linked in the issue description |
+| Change history | Issue notes (prepended, oldest-first) |
+| Baselines / releases | Milestones + git tags |
+| Versioned source files | Git commits (one per baseline, oldest-first) |
+
+### Configuration
+
+Add a `gitlab` section to your config file:
+
+```yaml
+gitlab:
+  server: "https://gitlab.com"           # or your self-hosted URL
+  project: "mygroup/myproject"           # namespace/project-name or numeric ID
+  token: "glpat-xxxxxxxxxxxxxxxxxxxx"    # PAT with api + write_repository scopes
+                                         # or omit and export GITLAB_TOKEN=...
+  default_branch: "main"
+  git_workdir: "gitlab_migration_repo"   # persistent local clone (created if absent)
+  verify_ssl: true
+```
+
+### Running
+
+```bash
+# Dry run — connects to GitLab but creates nothing
+python -m synergy_to_ewm.load config.yaml synergy_extract.json --target gitlab --dry-run
+
+# Full run
+python -m synergy_to_ewm.load config.yaml synergy_extract.json --target gitlab
+
+# After pip install .
+synergy-load config.yaml synergy_extract.json --target gitlab
+```
+
+### Issue labels
+
+Every migrated issue is tagged `migrated-from-synergy` plus scoped labels derived from the mapping:
+
+- `type::task`, `type::defect`, etc. (from `type_map`)
+- `status::new`, `status::resolved`, etc. (from `status_map`)
+- `priority::high`, `priority::medium`, etc. (from `priority_map`)
+
+### Source code workflow
+
+For each baseline the loader writes all its file versions to a persistent local clone, commits, creates a git tag matching the baseline name, then pushes. Loose artifacts (when migrating without baselines) are batched into a single commit. The local clone in `git_workdir` persists between runs so an interrupted migration can resume from the last committed baseline.
+
+---
+
+## Jazz SCM CLI backend
+
+By default the tool checks files into EWM using the REST API (one HTTP call per file). For large repositories this can be slow. Switch to IBM's official `scm` command-line tool, which batches files per baseline delivery and uses the same binary protocol as the Eclipse client.
+
+### Requirements
+
+- The EWM client (`scm` executable) installed and on your PATH, or set `scm_exe` to its full path.
+- A pre-existing login session **or** supply the password — the `scm login` command stores credentials in the user profile, similar to `ccm set_password`.
+
+### Configuration
+
+Add two fields to the `ewm` section of your config:
+
+```yaml
+ewm:
+  server: "https://ewm-host:9443/ccm"
+  user: "ewm_admin"
+  project_area: "My EWM Project"
+  scm_backend: cli          # switch from 'rest' (default) to 'cli'
+  scm_exe: scm              # full path if not on PATH; e.g. /opt/jazz/scm
+```
+
+### How it works
+
+For each baseline the CLI backend:
+1. Creates a temporary workspace targeted at the stream
+2. Writes all baseline files to a local sandbox directory
+3. Runs `scm add .` → `scm checkin` → `scm deliver` in one batch
+4. Creates the baseline snapshot with `scm create baseline`
+5. Deletes the temporary workspace
+
+Loose artifacts (when migrating without baselines) are batched into a single delivery.
+
+Work item migration always uses the REST API regardless of `scm_backend`.
+
+---
+
 ## Limitations
 
-- **Source control migration** uses EWM's SCM REST API. For very large repositories (tens of thousands of files), consider using IBM's official Jazz SCM command-line tools or a Git bridge instead, and use this module for work item migration only (`migrate_artifacts: false`, `migrate_baselines: false`).
+- **Source control migration** supports two backends — see [Jazz SCM CLI backend](#jazz-scm-cli-backend) below. The default REST backend is convenient but slow for large repositories. Switch to `scm_backend: cli` for tens of thousands of files.
 - **History / blame** is not preserved — all files are checked in as a single commit by the migration user.
 - **Links between work items** (parent/child, blocks/depends-on) are not migrated in the current version.
 - Tested against Synergy 7.x and EWM 7.x. Older server versions may return slightly different CLI output or API responses.

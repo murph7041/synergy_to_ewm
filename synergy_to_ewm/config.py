@@ -14,7 +14,7 @@ class SynergyConfig:
     server: str               # e.g. "http://synergy-host:8400"
     database: str             # Synergy database path or name
     user: str
-    password: str
+    password: Optional[str] = None  # omit to use credentials stored via `ccm set_password`
     ccm_exe: str = "ccm"      # full path if ccm is not on PATH
     # Optional scope filters
     project: Optional[str] = None    # Synergy project spec to scope extraction
@@ -30,12 +30,28 @@ class EWMConfig:
 
     server: str               # e.g. "https://ewm-host:9443/ccm"
     user: str
-    password: str
     project_area: str         # EWM Project Area name
+    password: Optional[str] = None  # omit to be prompted; credential can be saved to the system keyring
     # Optional component/stream to target for SCM migration
     component_name: Optional[str] = None
     stream_name: Optional[str] = None
     # TLS
+    verify_ssl: bool = True
+    ca_bundle: Optional[str] = None
+    # SCM backend: 'rest' (default) or 'cli' (IBM Jazz SCM command-line tool)
+    scm_backend: str = "rest"
+    scm_exe: str = "scm"    # path to the 'scm' executable; only used when scm_backend='cli'
+
+
+@dataclass
+class GitLabConfig:
+    """Connection settings for GitLab (issue tracking + git source control)."""
+
+    server: str               # e.g. "https://gitlab.com" or self-hosted URL
+    project: str              # "namespace/project-name" or numeric project ID
+    token: Optional[str] = None   # Personal/Project Access Token; falls back to GITLAB_TOKEN env var
+    default_branch: str = "main"
+    git_workdir: str = "gitlab_migration_repo"  # persistent local clone directory
     verify_ssl: bool = True
     ca_bundle: Optional[str] = None
 
@@ -57,5 +73,7 @@ class MigrationConfig:
     migrate_attachments: bool = True
     migrate_comments: bool = True
     dry_run: bool = False
+    # Path for the post-migration CR traceability report (CSV); None to skip
+    cr_report_file: Optional[str] = "cr_report.csv"
     # Extra mapping overrides as plain dicts (merged on top of YAML)
     field_overrides: dict = field(default_factory=dict)

@@ -11,10 +11,13 @@ setup(
         "requests>=2.31.0",
         "urllib3>=2.0.0",
         "PyYAML>=6.0",
+        "keyring>=24.0.0",
     ],
     entry_points={
         "console_scripts": [
             "synergy-to-ewm=synergy_to_ewm.migrate:main",
+            "synergy-extract=synergy_to_ewm.extract:main",
+            "synergy-load=synergy_to_ewm.load:main",
         ]
     },
 )
