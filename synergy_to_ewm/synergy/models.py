@@ -55,6 +55,8 @@ class SynergyTask:
     # The mapper reverses them when writing EWM comments so the timeline reads
     # chronologically.
     history: list[SynergyHistoryEntry] = field(default_factory=list)
+    # Change request specs associated with this task (e.g. CR object specs from Synergy).
+    change_requests: list[str] = field(default_factory=list)
 
 
 @dataclass

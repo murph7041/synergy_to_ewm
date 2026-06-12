@@ -162,6 +162,7 @@ class SynergyExtractor:
         comments = self._extract_comments(spec)
         attachments = self._extract_attachments(spec)
         history = self._extract_history(spec)
+        change_requests = self._extract_change_requests(spec)
 
         return SynergyTask(
             spec=spec,
@@ -185,6 +186,7 @@ class SynergyExtractor:
             comments=comments,
             attachments=attachments,
             history=history,
+            change_requests=change_requests,
         )
 
     # ------------------------------------------------------------------
@@ -260,6 +262,37 @@ class SynergyExtractor:
         except Exception:
             # History is optional metadata; failure here must not block migration.
             log.debug("Could not fetch history for %s", task_spec)
+            return []
+
+    # ------------------------------------------------------------------
+    # Change requests
+    # ------------------------------------------------------------------
+
+    def _extract_change_requests(self, task_spec: str) -> list[str]:
+        """
+        Return the list of Change Request specs associated with a task.
+
+        Queries Synergy for all objects whose ``has_associated_task`` relationship
+        points to this task spec.  Each returned displayname is one CR object spec
+        (e.g. ``cr42~problem_report~1:admin:mydb``).  An empty list is returned
+        when no CRs are found or the query fails — CRs are optional and their
+        absence must never block the migration.
+        """
+        try:
+            rows = self.client.query(
+                f"has_associated_task('{task_spec}')",
+                ["displayname", "synopsis"],
+            )
+            crs = []
+            for r in rows:
+                spec = r.get("displayname", "")
+                if not spec:
+                    continue
+                synopsis = r.get("synopsis", "").strip()
+                crs.append(f"{spec}: {synopsis}" if synopsis else spec)
+            return crs
+        except Exception:
+            log.debug("Could not fetch change requests for %s", task_spec)
             return []
 
     # ------------------------------------------------------------------

@@ -73,5 +73,7 @@ class MigrationConfig:
     migrate_attachments: bool = True
     migrate_comments: bool = True
     dry_run: bool = False
+    # Path for the post-migration CR traceability report (CSV); None to skip
+    cr_report_file: Optional[str] = "cr_report.csv"
     # Extra mapping overrides as plain dicts (merged on top of YAML)
     field_overrides: dict = field(default_factory=dict)

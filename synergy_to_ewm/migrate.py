@@ -180,6 +180,7 @@ class Migrator:
 
         syn_cfg = self.cfg.synergy
         ewm_cfg = self.cfg.ewm
+        all_tasks: list = []
 
         try:
             # Both context managers call stop/close in __exit__, so a mid-run
@@ -252,10 +253,12 @@ class Migrator:
                         # the same EWM work-item pipeline, so we run both per release.
                         if self.cfg.migrate_tasks:
                             for rel in effective_releases:
-                                self._migrate_tasks(extractor, loader, stats,
-                                                    task_type="task", release=rel)
-                                self._migrate_tasks(extractor, loader, stats,
-                                                    task_type="defect", release=rel)
+                                all_tasks.extend(self._migrate_tasks(
+                                    extractor, loader, stats,
+                                    task_type="task", release=rel))
+                                all_tasks.extend(self._migrate_tasks(
+                                    extractor, loader, stats,
+                                    task_type="defect", release=rel))
 
                         # Baselines are project-wide (not per-release in CCM), so we
                         # query them once and filter by the effective release list.
@@ -319,6 +322,13 @@ class Migrator:
                     failed, self.cfg.state_file,
                 )
 
+        if all_tasks and self.cfg.cr_report_file:
+            try:
+                from .report import write_cr_report
+                write_cr_report(all_tasks, self._state, self.cfg.cr_report_file)
+            except Exception:
+                log.exception("Failed to write CR report to %s", self.cfg.cr_report_file)
+
         log.info("Migration complete: %s", stats)
         return stats
 
@@ -333,7 +343,7 @@ class Migrator:
         stats: dict,
         task_type: str = "task",
         release: object = None,
-    ) -> None:
+    ) -> list:
         label = f"{task_type}s" + (f" (release={release})" if release else "")
         log.info("=== Migrating %s ===", label)
         try:
@@ -344,7 +354,7 @@ class Migrator:
             # Already-migrated items in the state file are unaffected.
             log.exception("Failed to extract %s", label)
             stats["errors"].append(f"extract_{task_type}s")
-            return
+            return []
 
         for task in tasks:
             if self._state.is_done(task.task_number):
@@ -376,6 +386,8 @@ class Migrator:
                 self._state.mark_failed(task.task_number, reason)
                 stats["tasks_failed"] += 1
                 stats["errors"].append(task.task_number)
+
+        return tasks
 
     def _migrate_baselines(
         self,

@@ -149,6 +149,11 @@ def _build_description(task: SynergyTask) -> str:
     lines.append(f"- Release: {task.release}")
     lines.append(f"- Submitter: {task.submitter}")
     lines.append(f"- Resolver: {task.resolver}")
+    if task.change_requests:
+        lines.append("")
+        lines.append("**Associated Change Requests:**")
+        for cr in task.change_requests:
+            lines.append(f"- {cr}")
     if task.custom_attrs:
         lines.append("")
         lines.append("**Additional attributes:**")

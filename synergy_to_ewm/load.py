@@ -111,6 +111,7 @@ def _deserialize_task(d: dict) -> SynergyTask:
         comments=[_deserialize_comment(c) for c in d.get("comments", [])],
         attachments=[_deserialize_attachment(a) for a in d.get("attachments", [])],
         history=[_deserialize_history(h) for h in d.get("history", [])],
+        change_requests=d.get("change_requests", []),
     )
 
 
@@ -167,6 +168,7 @@ class FileLoader:
         self.migrate_artifacts = migration_raw.get("migrate_artifacts", True)
         self.migrate_baselines = migration_raw.get("migrate_baselines", True)
         self._state = MigrationState(migration_raw.get("state_file", "migration_state.json"))
+        self.cr_report_file = migration_raw.get("cr_report_file", "cr_report.csv")
         self._mapping = load_mapping(
             override_file=migration_raw.get("mapping_file"),
             extra_overrides=migration_raw.get("field_overrides") or {},
@@ -260,6 +262,14 @@ class FileLoader:
                     "%d item(s) failed — fix the cause and re-run to retry automatically.",
                     failed,
                 )
+
+        all_tasks = tasks + defects
+        if all_tasks and self.cr_report_file and self.migrate_tasks:
+            try:
+                from .report import write_cr_report
+                write_cr_report(all_tasks, self._state, self.cr_report_file)
+            except Exception:
+                log.exception("Failed to write CR report to %s", self.cr_report_file)
 
         log.info("Load complete: %s", stats)
         return stats
